@@ -1,96 +1,83 @@
 // ============================================================
 // main.js
-// This is the ENTRY POINT of the game.
-// It sets up everything and runs the game loop.
-// Think of this as the "director" — it connects all other files.
+// Entry point of the game — connects all systems together
 //
-// Files it connects:
-//   - player.js   → handles movement and mouse look
-//   - map.js      → builds the level/map
-//   - weapons.js  → handles shooting and reloading
+// Files connected:
+//   player.js   → movement and mouse look
+//   map.js      → builds the level
+//   weapons.js  → shooting and reloading
+//   enemies.js  → enemy bots and AI
 // ============================================================
 
 import * as THREE from 'three';
 import { createPlayer, updatePlayer } from './player.js';
 import { createMap } from './map.js';
 import { createWeapons, updateWeapons, shoot, reload } from './weapons.js';
+import { createEnemies, updateEnemies } from './enemies.js';
 
 
-// ─── SCENE SETUP ────────────────────────────────────────────
-// The scene is like the "world container"
-// Everything (walls, lights, player, enemies) goes inside it
+// ─── SCENE ──────────────────────────────────────────────────
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // sky blue background
-scene.fog = new THREE.Fog(0x87ceeb, 10, 80);  // fog starts at 10 units, fully hidden at 80
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 10, 100);
 
 
 // ─── RENDERER ───────────────────────────────────────────────
-// The renderer draws the 3D scene onto the screen using WebGL
-const renderer = new THREE.WebGLRenderer({ antialias: true }); // antialias = smoother edges
-renderer.setSize(window.innerWidth, window.innerHeight);        // fill the whole screen
-renderer.shadowMap.enabled = true;                              // enable shadows
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
 
-// ── Position the canvas BEHIND the HUD ──
-// Without this, the canvas covers the HUD and ammo numbers won't show
+// Canvas sits behind HUD
 renderer.domElement.style.position = 'fixed';
-renderer.domElement.style.top = '0';
-renderer.domElement.style.left = '0';
-renderer.domElement.style.width = '100%';
-renderer.domElement.style.height = '100%';
-renderer.domElement.style.zIndex = '0'; // z-index 0 = behind HUD (which is 999)
+renderer.domElement.style.top      = '0';
+renderer.domElement.style.left     = '0';
+renderer.domElement.style.width    = '100%';
+renderer.domElement.style.height   = '100%';
+renderer.domElement.style.zIndex   = '0';
 
-document.body.appendChild(renderer.domElement); // add canvas to the webpage
+document.body.appendChild(renderer.domElement);
 
 
 // ─── CAMERA ─────────────────────────────────────────────────
-// The camera is the player's eyes.
-// PerspectiveCamera = realistic 3D perspective (like a real camera)
 const camera = new THREE.PerspectiveCamera(
-  75,                                      // FOV (field of view) — 75 is standard FPS
-  window.innerWidth / window.innerHeight,  // aspect ratio (width / height)
-  0.1,                                     // near clipping — objects closer than this are hidden
-  1000                                     // far clipping — objects farther than this are hidden
+  75,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  1000
 );
-camera.position.set(0, 1.7, 0); // start position: center of map, eye height (1.7 units = ~170cm)
+camera.position.set(-50, 1.7, 0); // CT spawn — west side blue base
 
 
 // ─── LIGHTING ───────────────────────────────────────────────
-// Without lights, everything appears black
-
-// Ambient light = soft light that hits everything equally (like a cloudy day)
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // white light, 60% intensity
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
-// Directional light = acts like the sun (parallel rays from one direction)
-const sunLight = new THREE.DirectionalLight(0xffffff, 1); // white light, full intensity
-sunLight.position.set(50, 80, 50);           // position of the "sun"
-sunLight.castShadow = true;                  // this light creates shadows
-sunLight.shadow.mapSize.width = 2048;        // shadow quality (higher = sharper shadows)
+const sunLight = new THREE.DirectionalLight(0xffffff, 1);
+sunLight.position.set(50, 80, 50);
+sunLight.castShadow = true;
+sunLight.shadow.mapSize.width  = 2048;
 sunLight.shadow.mapSize.height = 2048;
 scene.add(sunLight);
 
 
 // ─── MAP ────────────────────────────────────────────────────
-// Builds all walls, floor, and crates in the scene
-// All map geometry is defined in map.js
 createMap(scene);
 
 
 // ─── PLAYER ─────────────────────────────────────────────────
-// Sets up keyboard and mouse controls
-// Returns a player object used by updatePlayer() every frame
 const player = createPlayer(camera, scene);
 
 
 // ─── WEAPONS ────────────────────────────────────────────────
-// Loads the gun model and attaches it to the camera
-// Returns a weapons object used by shoot() and reload()
 const weapons = createWeapons(camera, scene);
 
 
+// ─── ENEMIES ────────────────────────────────────────────────
+// Spawns 3 enemy bots on the T side (east)
+const enemies = createEnemies(scene);
+
+
 // ─── WINDOW RESIZE ──────────────────────────────────────────
-// If the browser window is resized, update camera and renderer
-// so the game doesn't look stretched or squished
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -99,61 +86,73 @@ window.addEventListener('resize', () => {
 
 
 // ─── POINTER LOCK ───────────────────────────────────────────
-// Pointer lock hides the mouse cursor and lets us use mouse movement
-// for looking around (like all FPS games)
-const blocker = document.getElementById('blocker'); // the "Click to Play" screen
+const blocker = document.getElementById('blocker');
 
-// Click the blocker screen → lock the mouse → start playing
 blocker.addEventListener('click', () => {
   document.body.requestPointerLock();
 });
 
-// When pointer lock is activated → hide the blocker screen
-// When pointer lock is lost (e.g. pressed Escape) → show blocker screen again
 document.addEventListener('pointerlockchange', () => {
   if (document.pointerLockElement === document.body) {
-    blocker.style.display = 'none'; // hide "Click to Play" screen
+    blocker.style.display = 'none';
   } else {
-    blocker.style.display = 'flex'; // show "Click to Play" screen
+    blocker.style.display = 'flex';
   }
 });
 
 
-// ─── SHOOTING — Left Mouse Click ────────────────────────────
-// Listens for mouse clicks while pointer is locked
-// Left click (button 0) = shoot
+// ─── SHOOTING — handled inside updateWeapons (auto-fire) ────
+// Single click still works via mousedown for quick tap shots
+// ─── SHOOTING — Left Click ───────────────────────────────────
 document.addEventListener('mousedown', (e) => {
-  if (document.pointerLockElement !== document.body) return; // only shoot when playing
-  if (e.button === 0) shoot(weapons, camera, scene);         // left click = shoot
+  if (document.pointerLockElement !== document.body) return;
+  if (e.button === 0) shoot(weapons, camera, scene, enemies);
+
+  // ── Right Click — Zoom In (ADS) ──
+  if (e.button === 2) {
+    camera.fov = 30; // zoom in (normal is 75)
+    camera.updateProjectionMatrix();
+
+    // Make crosshair smaller when zoomed
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) crosshair.style.transform = 'translate(-50%, -50%) scale(0.5)';
+  }
 });
+
+// ─── ZOOM OUT — Right Click Release ─────────────────────────
+document.addEventListener('mouseup', (e) => {
+  if (e.button === 2) {
+    camera.fov = 75; // zoom back out
+    camera.updateProjectionMatrix();
+
+    // Restore crosshair size
+    const crosshair = document.getElementById('crosshair');
+    if (crosshair) crosshair.style.transform = 'translate(-50%, -50%) scale(1)';
+  }
+});
+
+// ─── PREVENT RIGHT CLICK MENU ───────────────────────────────
+document.addEventListener('contextmenu', (e) => e.preventDefault());
 
 
 // ─── RELOAD — R Key ─────────────────────────────────────────
-// Press R to reload the current weapon
 document.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') reload(weapons);
 });
 
 
 // ─── GAME LOOP ───────────────────────────────────────────────
-// This runs every frame (about 60 times per second)
-// It updates the game state and re-renders the scene
-const clock = new THREE.Clock(); // keeps track of time between frames
+const clock = new THREE.Clock();
 
 function animate() {
-  requestAnimationFrame(animate); // tell browser to call animate() again next frame
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
 
-  const delta = clock.getDelta(); // time since last frame (in seconds, e.g. 0.016 for 60fps)
-
-  // Update player movement and collision every frame
   updatePlayer(player, delta, scene);
+  updateWeapons(weapons, delta, scene, camera, enemies);
+  updateEnemies(enemies, delta, scene, camera, player); // move enemy bots every frame
 
-  // Update weapon cooldown timer every frame
-  updateWeapons(weapons, delta, scene, camera);
-
-  // Draw the scene from the camera's point of view
   renderer.render(scene, camera);
 }
 
-// Start the game loop!
 animate();

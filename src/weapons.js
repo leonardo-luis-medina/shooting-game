@@ -2,7 +2,8 @@
 // weapons.js
 // Handles everything related to weapons:
 // - Loading the gun model (or showing a placeholder box)
-// - Shooting (raycasting, hit detection)
+// - Shooting with recoil effect
+// - Auto-fire when holding left click
 // - Reloading
 // - Muzzle flash effect
 // - Bullet hit effect
@@ -13,223 +14,263 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // ─── WEAPON STATE ───────────────────────────────────────────
-let currentWeapon = null;  // the 3D gun model currently visible
-let shootCooldown = 0;     // timer to prevent shooting too fast
-const SHOOT_DELAY = 0.1;   // seconds between each shot (10 shots/sec max)
-const MAG_SIZE = 30;       // bullets per magazine
+let shootCooldown  = 0;      // timer between shots
+let isMouseHeld    = false;  // true when left click is held
+let recoilAmount   = 0;      // current recoil offset
+let recoilRecovery = 0;      // how fast recoil recovers
+
+const SHOOT_DELAY    = 0.09; // seconds between auto-fire shots
+const MAG_SIZE       = 30;   // bullets per magazine
+const RECOIL_KICK    = 0.012; // how much camera kicks up per shot
+const RECOIL_MAX     = 0.15;  // max recoil before it stops increasing
+const RECOIL_RECOVER = 0.04;  // how fast recoil recovers per frame
 
 
 // ============================================================
 // FUNCTION: createWeapons
-// Called once when the game starts.
-// Loads the gun model and attaches it to the camera.
-// Returns a "weapons" object used by shoot() and reload().
+// Called once at game start
+// Loads gun model, attaches to camera
+// Sets up mouse hold detection for auto-fire
 // ============================================================
 export function createWeapons(camera, scene) {
 
-  // GLTFLoader loads .glb / .gltf 3D model files
   const loader = new GLTFLoader();
 
   // ── Weapon Holder ──
-  // This is an invisible group attached to the camera.
-  // Whatever we put inside it will always appear in front of the player.
   const weaponHolder = new THREE.Group();
-  camera.add(weaponHolder);  // attach to camera so gun moves with player view
-  scene.add(camera);         // camera must be in the scene for this to work
-
-  // Position the gun: right (0.3), down (-0.3), in front (-0.5)
-  // Adjust these numbers to move the gun on screen
+  camera.add(weaponHolder);
+  scene.add(camera);
   weaponHolder.position.set(0.3, -0.3, -0.5);
 
   // ── Load Gun Model ──
-  // Tries to load your ak47.glb from the public/models/weapons/ folder
   loader.load(
-    '/models/weapons/ak47.glb',  // path to your gun model
-
-    // SUCCESS: model loaded correctly
+    '/models/weapons/ak47.glb',
     (gltf) => {
-      currentWeapon = gltf.scene;
-      currentWeapon.scale.set(0.1, 0.1, 0.1); // scale down — adjust if gun looks too big/small
-      weaponHolder.add(currentWeapon);
-      console.log('✅ Gun model loaded successfully!');
+      const gun = gltf.scene;
+      gun.scale.set(0.1, 0.1, 0.1);
+      weaponHolder.add(gun);
+      console.log('✅ Gun model loaded!');
     },
-
-    // PROGRESS: loading in progress (we ignore this)
     undefined,
-
-    // ERROR: model file not found — show a grey box as placeholder
     () => {
-      console.warn('⚠️ No gun model found at /models/weapons/ak47.glb — using placeholder box');
-      const gunGeo = new THREE.BoxGeometry(0.05, 0.05, 0.3);
-      const gunMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
-      currentWeapon = new THREE.Mesh(gunGeo, gunMat);
-      weaponHolder.add(currentWeapon);
+      console.warn('⚠️ No gun model — using placeholder');
+      const gun = new THREE.Mesh(
+        new THREE.BoxGeometry(0.05, 0.05, 0.3),
+        new THREE.MeshLambertMaterial({ color: 0x333333 })
+      );
+      weaponHolder.add(gun);
     }
   );
 
-  // ── Return Weapons Object ──
-  // This object is passed around to shoot(), reload(), updateWeapons()
+  // ── Mouse Hold Detection ──
+  // Track if left mouse button is being held for auto-fire
+  document.addEventListener('mousedown', (e) => {
+    if (e.button === 0) isMouseHeld = true;
+  });
+  document.addEventListener('mouseup', (e) => {
+    if (e.button === 0) {
+      isMouseHeld = false;
+      recoilRecovery = 0; // start recovering when mouse released
+    }
+  });
+
   return {
-    weaponHolder,          // the group holding the gun model
-    bulletsLeft: MAG_SIZE, // current bullets in magazine (starts full)
-    totalAmmo: 90,         // total reserve ammo (not in magazine)
+    weaponHolder,
+    camera,                  // stored so recoil can move camera
+    bulletsLeft: MAG_SIZE,
+    totalAmmo:   150,        // ← updated to 150 reserve ammo
   };
 }
 
 
 // ============================================================
 // FUNCTION: updateWeapons
-// Called every frame in the game loop (main.js).
-// Counts down the shoot cooldown timer so player can shoot again.
+// Called every frame
+// Handles auto-fire, shoot cooldown, and recoil recovery
 // ============================================================
-export function updateWeapons(weapons, delta, scene, camera) {
-  // delta = time since last frame (in seconds)
-  // Subtract from cooldown so shooting is time-based, not frame-rate-based
-  if (shootCooldown > 0) {
-    shootCooldown -= delta;
+export function updateWeapons(weapons, delta, scene, camera, enemies) {
+
+  // ── Count down shoot cooldown ──
+  if (shootCooldown > 0) shootCooldown -= delta;
+
+  // ── Auto-fire while mouse is held ──
+  if (isMouseHeld && document.pointerLockElement === document.body) {
+    if (shootCooldown <= 0 && weapons.bulletsLeft > 0) {
+      shoot(weapons, camera, scene, enemies);
+    }
+  }
+
+  // ── Recoil Recovery ──
+  // Camera slowly returns to original position after shooting
+  if (recoilAmount > 0) {
+    const recovery = RECOIL_RECOVER * (1 + recoilRecovery);
+    recoilAmount = Math.max(0, recoilAmount - recovery);
+    camera.rotation.x = Math.max(
+      -Math.PI / 2.5,
+      camera.rotation.x - recovery
+    );
   }
 }
 
 
 // ============================================================
 // FUNCTION: shoot
-// Called when player left-clicks.
-// Fires a ray from the center of the screen forward.
-// If it hits something, triggers hit effect or enemy damage.
+// Fires one bullet — called by auto-fire in updateWeapons
+// or directly on single click from main.js
 // ============================================================
-export function shoot(weapons, camera, scene) {
+export function shoot(weapons, camera, scene, enemies = []) {
 
-  // ── Block shooting if cooldown is active ──
+  // ── Block if cooling down ──
   if (shootCooldown > 0) return;
 
-  // ── Block shooting if magazine is empty ──
+  // ── Block if magazine empty ──
   if (weapons.bulletsLeft <= 0) {
-    console.log('🔴 Magazine empty! Press R to reload.');
+    console.log('🔴 Empty! Press R to reload.');
     return;
   }
 
-  // ── Raycasting ──
-  // A raycaster shoots an invisible ray from the camera center forward.
-  // If it hits an object, we know the player aimed at it.
+  // ── Raycast from center of screen ──
+  // far = 500 means bullets reach anywhere on the map
   const raycaster = new THREE.Raycaster();
-  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera); // (0,0) = center of screen
-
-  // Only check walls and enemies for hits (ignore floor, sky, etc.)
-  const targets = scene.children.filter(
-    obj => obj.userData.isEnemy || obj.userData.isWall
-  );
-
-  // Get list of objects the ray hit, sorted by distance (closest first)
-  const hits = raycaster.intersectObjects(targets, true);
+  raycaster.near = 0.1;
+  raycaster.far  = 500;
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  // Check ALL objects in scene recursively for hits
+  const hits = raycaster.intersectObjects(scene.children, true);
 
   if (hits.length > 0) {
-    const hit = hits[0]; // closest hit object
+    const hit = hits[0];
 
-    // ── Spawn orange flash at the hit point ──
+    // ── Spawn orange flash at hit point ──
     spawnHitEffect(hit.point, scene);
 
-    // ── Enemy hit detection ──
-    // Check if the hit object (or its parent) is an enemy
-    if (hit.object.userData.isEnemy || hit.object.parent?.userData.isEnemy) {
-      console.log('💥 Enemy hit!');
-      // Reduce enemy health by 25 per bullet (4 shots to kill)
-      hit.object.userData.health = (hit.object.userData.health || 100) - 25;
+    // ── Walk up object tree to find enemy group ──
+    let hitObject = hit.object;
+    while (hitObject && !hitObject.userData.isEnemy) {
+      hitObject = hitObject.parent;
+    }
+
+    if (hitObject && hitObject.userData.isEnemy) {
+
+      // ── KEY FIX: get enemy via enemyRef on the hit child ──
+      // hit.object is a child (body/head), enemyRef points to group
+      // group.userData.enemyObj points to the actual enemy object
+      const enemyGroup = hit.object.userData.enemyRef || hitObject;
+      const enemy = enemyGroup?.userData?.enemyObj;
+
+      if (enemy && enemy.alive) {
+        // Import and use damageEnemy for clean damage handling
+        enemy.health -= 10;
+        console.log(`💥 Enemy hit! Health: ${enemy.health}/100`);
+
+        // ── Update health bar ──
+        const hpBar = enemy.group.userData.hpBar;
+        if (hpBar) {
+          const ratio      = Math.max(0, enemy.health / 100);
+          hpBar.scale.x    = ratio;
+          hpBar.position.x = -(1 - ratio) / 2;
+          if (ratio > 0.5)       hpBar.material.color.set(0x00ff00);
+          else if (ratio > 0.25) hpBar.material.color.set(0xffff00);
+          else                   hpBar.material.color.set(0xff0000);
+        }
+
+        // ── Kill if health gone ──
+        if (enemy.health <= 0 && enemy.alive) {
+          enemy.alive = false;
+          console.log('☠️ Enemy killed!');
+          enemy.group.children.forEach(child => {
+            if (child.material) child.material.color.set(0xffffff);
+          });
+          setTimeout(() => scene.remove(enemy.group), 300);
+        }
+      }
     }
   }
 
   // ── Muzzle Flash ──
-  // Briefly adds a point light in front of the gun to simulate flash
   muzzleFlash(weapons.weaponHolder);
 
-  // ── Reduce ammo ──
+  // ── Recoil — kick camera up ──
+  if (recoilAmount < RECOIL_MAX) {
+    recoilAmount += RECOIL_KICK;
+    recoilRecovery += 0.1; // gets harder to control the longer you shoot
+  }
+  camera.rotation.x = Math.min(
+    Math.PI / 2.5,
+    camera.rotation.x + RECOIL_KICK
+  );
+
+  // ── Reduce ammo and start cooldown ──
   weapons.bulletsLeft--;
   shootCooldown = SHOOT_DELAY;
 
-  // ── Update ammo display on screen ──
-  const ammoEl = document.getElementById('ammo');
-  const totalEl = document.getElementById('total-ammo');
-  if (ammoEl) ammoEl.textContent = weapons.bulletsLeft;
-  if (totalEl) totalEl.textContent = weapons.totalAmmo;
-  console.log('Bullets left:', weapons.bulletsLeft, '/ Total:', weapons.totalAmmo);
+  // ── Update HUD ──
+  updateAmmoHUD(weapons);
 }
 
 
 // ============================================================
 // FUNCTION: reload
-// Called when player presses R.
-// Takes bullets from reserve (totalAmmo) and fills the magazine.
-// Example: 10/90 → press R → 30/70
+// Press R — refills magazine from reserve
+// Example: 5/150 → R → 30/125
 // ============================================================
 export function reload(weapons) {
 
-  // ── Don't reload if no reserve ammo ──
   if (weapons.totalAmmo <= 0) {
-    console.log('🔴 No reserve ammo left!');
+    console.log('🔴 No reserve ammo!');
     return;
   }
 
-  // ── Don't reload if magazine already full ──
   if (weapons.bulletsLeft === MAG_SIZE) {
     console.log('🟡 Magazine already full!');
     return;
   }
 
-  // Calculate how many bullets we need to fill the mag
   const needed = MAG_SIZE - weapons.bulletsLeft;
+  const taken  = Math.min(needed, weapons.totalAmmo);
 
-  // Take only what's available from reserve
-  const taken = Math.min(needed, weapons.totalAmmo);
-
-  // Fill magazine, reduce reserve
   weapons.bulletsLeft += taken;
-  weapons.totalAmmo -= taken;
+  weapons.totalAmmo   -= taken;
 
   console.log(`🔄 Reloaded! Mag: ${weapons.bulletsLeft} | Reserve: ${weapons.totalAmmo}`);
-
-  // ── Update ammo display on screen ──
   updateAmmoHUD(weapons);
 }
 
 
 // ============================================================
 // FUNCTION: updateAmmoHUD
-// Updates the ammo numbers shown on screen.
-// Format: bulletsLeft / totalAmmo  →  example: 30/90
+// Updates ammo numbers on screen — format: 30/150
 // ============================================================
 export function updateAmmoHUD(weapons) {
-  document.getElementById('ammo').textContent = weapons.bulletsLeft;
-  document.getElementById('total-ammo').textContent = weapons.totalAmmo;
+  const ammoEl  = document.getElementById('ammo');
+  const totalEl = document.getElementById('total-ammo');
+  if (ammoEl)  ammoEl.textContent  = weapons.bulletsLeft;
+  if (totalEl) totalEl.textContent = weapons.totalAmmo;
 }
 
 
 // ============================================================
-// FUNCTION: spawnHitEffect  (private — only used inside this file)
-// Creates a small orange sphere at the point where bullet landed.
-// Disappears after 0.5 seconds.
+// FUNCTION: spawnHitEffect (private)
+// Orange sphere at bullet impact — removed after 500ms
 // ============================================================
 function spawnHitEffect(point, scene) {
-  const geo = new THREE.SphereGeometry(0.05, 4, 4);
-  const mat = new THREE.MeshBasicMaterial({ color: 0xff4400 }); // orange
-  const flash = new THREE.Mesh(geo, mat);
-  flash.position.copy(point); // place it exactly where bullet hit
-  scene.add(flash);
-
-  // Auto-remove after 500ms so it doesn't pile up in the scene
-  setTimeout(() => scene.remove(flash), 500);
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.05, 4, 4),
+    new THREE.MeshBasicMaterial({ color: 0xff4400 })
+  );
+  mesh.position.copy(point);
+  scene.add(mesh);
+  setTimeout(() => scene.remove(mesh), 500);
 }
 
 
 // ============================================================
-// FUNCTION: muzzleFlash  (private — only used inside this file)
-// Adds a brief orange point light in front of the gun
-// to simulate the flash of firing.
-// Disappears after 50ms.
+// FUNCTION: muzzleFlash (private)
+// Brief orange point light at gun barrel — removed after 50ms
 // ============================================================
 function muzzleFlash(weaponHolder) {
-  const light = new THREE.PointLight(0xff8800, 5, 3); // orange light, intensity 5, range 3
-  light.position.set(0, 0, -0.5); // in front of the gun barrel
+  const light = new THREE.PointLight(0xff8800, 5, 3);
+  light.position.set(0, 0, -0.5);
   weaponHolder.add(light);
-
-  // Remove the light after 50ms (just a quick flash)
   setTimeout(() => weaponHolder.remove(light), 50);
 }
