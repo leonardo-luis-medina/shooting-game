@@ -54,7 +54,9 @@
         font-family: Arial, sans-serif;
         font-size: 20px;
         text-shadow: 1px 1px 3px black;
-      }
+        z-index: 1000;
+        pointer-events: none;
+}
       #blocker {
         position: fixed;
         top: 0; left: 0;
@@ -79,15 +81,15 @@
     </style>
   </head>
   <body>
-    <div id="blocker">
+    <div id="blocker">s
       <h1>SHOOTING GAME</h1>
       <p>Click to Play</p>
     </div>
     <div id="crosshair"></div>
     <div id="hud">
-      ❤️ <span id="health">100</span> &nbsp;&nbsp;
-      🔫 <span id="ammo">30</span>
-    </div>
+  ❤️ <span id="health">100</span> &nbsp;&nbsp;
+  🔫 <span id="ammo">30</span> / <span id="total-ammo">90</span>
+</div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

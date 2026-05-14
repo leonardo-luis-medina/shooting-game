@@ -83,7 +83,6 @@ export function updatePlayer(player, delta, scene) {
 
   // ─── HUD UPDATE ───
   document.getElementById('health').textContent = player.health;
-  document.getElementById('ammo').textContent   = player.ammo;
 }
 
 // ─── SIMPLE COLLISION ───
